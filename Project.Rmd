@@ -1,0 +1,557 @@
+---
+title: "Project"
+author: "Jean-Raymond Occil Jr."
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+Sys.setenv(RETICULATE_PYTHON = "disabled")
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Tasks
+
+## Question 1
+
+### a. Check for univariate normality 
+```{r}
+
+library(moments)   
+library(ggplot2)
+
+# Read data (adjust the path if needed)
+bird <- read.csv("BIRD.csv")
+
+# Peek
+str(bird)
+summary(bird[, c("TailL","WingL")])
+
+
+check_univariate_normality <- function(x, varname){
+  x <- as.numeric(x)
+  n <- length(x)
+
+  # Moment-based measures
+  g1 <- skewness(x)
+  b2 <- kurtosis(x) + 3   # convert from "excess kurtosis" to full kurtosis (Normal = 3)
+
+  # Formal tests
+  ago <- agostino.test(x)
+  ans <- anscombe.test(x)
+  shap <- shapiro.test(x)
+
+  cat("\n====", varname, "====\n")
+  cat("n =", n,
+      sprintf("\nSkewness g1 = %.3f  (p=%.4f from D'Agostino)\n", g1, ago$p.value),
+      sprintf("Kurtosis b2 = %.3f  (p=%.4f from Anscombe–Glynn)\n", b2, ans$p.value),
+      sprintf("Shapiro–Wilk W = %.3f (p=%.4f)\n", shap$statistic, shap$p.value)
+  )
+
+  # Plots
+  p1 <- ggplot(data.frame(x), aes(x)) +
+    geom_histogram(aes(y = ..density..), bins = max(10, floor(sqrt(n))), alpha = 0.5) +
+    geom_density(linewidth = 1) +
+    labs(title = paste0(varname, ": Histogram + Density"), x = varname, y = "Density")
+
+  p2 <- ggplot(data.frame(x), aes(sample = x)) +
+    stat_qq() + stat_qq_line() +
+    labs(title = paste0(varname, ": Normal Q-Q Plot"), x = "Theoretical Quantiles", y = "Sample Quantiles")
+
+  print(p1); print(p2)
+
+  invisible(list(n=n, skewness=g1, kurtosis=b2,
+                 agostino_p=ago$p.value, anscombe_p=ans$p.value,
+                 shapiro_W=unname(shap$statistic), shapiro_p=shap$p.value))
+}
+
+res_tail <- check_univariate_normality(bird$TailL, "TailL")
+res_wing <- check_univariate_normality(bird$WingL, "WingL")
+```
+
+
+### b. Bivariate Normality check using Chi-square Ellipse
+```{r}
+library(MVN)       # For MVN tests
+library(ellipse)   # For chi-square ellipse
+
+# Select the two numeric columns
+bird_xy <- bird[, c("TailL", "WingL")]
+
+# Compute mean vector and covariance matrix
+x_bar <- colMeans(bird_xy)
+S <- cov(bird_xy)
+
+# Mahalanobis distances
+D2 <- mahalanobis(bird_xy, center = x_bar, cov = S)
+
+# 50% quantile of chi-square
+chi2_50 <- qchisq(0.5, df = 2)
+
+# Base plot
+plot(bird_xy$TailL, bird_xy$WingL, pch = 19, col = "darkblue",
+     xlab = "Tail Length (mm)", ylab = "Wing Length (mm)",
+     main = expression(paste("Bivariate Normality Check with ", chi^2[0.5], " Ellipse")))
+
+# 50% Ellipse
+lines(ellipse(S, centre = x_bar, level = 0.5), col = "red", lwd = 2)
+
+lines(ellipse(S, centre = x_bar, level = 0.95), col = "darkgreen", lty = 2, lwd = 1.5)
+
+legend("topleft", legend = c("Data", "50% Ellipse", "95% Ellipse"),
+       col = c("darkblue", "red", "darkgreen"), lwd = c(NA, 2, 1.5), pch = c(19, NA, NA))
+```
+
+
+I plotted the data with a 50% chi-square ellipse based on the sample covariance matrix. If the points are roughly elliptical and symmetrically distributed around the mean, it suggests that the pair of variables (TailL, WingL) are approximately bivariate normal. I also verified this using Mardia’s test; a non-significant p-value indicates no strong deviation from multivariate normality.
+
+### c. Chi-square Plot 
+```{r}
+# Reusing bird_xy, x_bar, S from part b
+
+#  Mahalanobis distances
+D2 <- mahalanobis(bird_xy, center = x_bar, cov = S)
+
+# Theoretical chi-square quantiles for df = 2
+n  <- nrow(bird_xy)
+p  <- 2
+i  <- seq_len(n)
+# Use (i - 0.5)/n for plotting positions
+chi_theo <- qchisq((i - 0.5)/n, df = p)
+
+# Sorting for a QQ-style plot
+D2_sorted  <- sort(as.numeric(D2))
+chi_sorted <- sort(chi_theo)
+
+# Tidy frame for plotting & diagnostics
+qq_df <- data.frame(theoretical = chi_sorted, observed = D2_sorted)
+
+# Diagnostics
+fit <- lm(observed ~ theoretical, data = qq_df)
+sum_fit <- summary(fit)
+
+cat("\n--- Chi-square QQ diagnostics (df = 2) ---\n")
+cat(sprintf("Intercept = %.3f (SE = %.3f)\n", coef(fit)[1], sum_fit$coefficients[1,2]))
+cat(sprintf("Slope     = %.3f (SE = %.3f)\n", coef(fit)[2], sum_fit$coefficients[2,2]))
+cat(sprintf("R^2       = %.4f\n", sum_fit$r.squared))
+
+# Plot
+library(ggplot2)
+ggplot(qq_df, aes(x = theoretical, y = observed)) +
+  geom_point(size = 2) +
+  geom_abline(intercept = 0, slope = 1, linewidth = 1) +
+  labs(
+    title = expression(paste(chi^2, " Plot for Bivariate Normality (df = 2)")),
+    x = expression(paste("Theoretical quantiles of ", chi^2[2])),
+    y = expression(paste("Ordered Mahalanobis distances  ", D^2))
+  ) +
+  theme_minimal()
+
+```
+
+- I computed Mahalanobis distances D^2 and plotted them against the theoretical quatiles.
+- If the points track the y = x line closely, that supports approximate bivariate normality.
+- he quick regression of observed ~ theoretical is just a diagnostic: intercept ≈ 0, slope ≈ 1, and R^2 close to 1 indicate a good match. 
+- Systematic curvature (concave/convex) suggests tail/heavy-tail departures; strong deviations at the ends suggest outliers or skewness.
+
+
+### d. Detecting outliers
+```{r}
+library(ggplot2)
+
+# Reusing data and objects from parts b–c
+x_bar <- colMeans(bird_xy)
+S <- cov(bird_xy)
+p <- ncol(bird_xy)
+n <- nrow(bird_xy)
+
+# Computing Mahalanobis distances and chi-square cutoff
+D2 <- mahalanobis(bird_xy, center = x_bar, cov = S)
+cutoff <- qchisq(0.975, df = p)   # 97.5% cutoff for df=2
+
+# Identifying potential outliers
+outliers <- which(D2 > cutoff)
+cat("Potential outliers (97.5% cutoff):", outliers, "\n")
+
+# Adding results to a data frame for plotting
+bird_out <- cbind(bird_xy, D2 = D2,
+                  Outlier = ifelse(D2 > cutoff, "Yes", "No"))
+
+# Plotting Mahalanobis distances with cutoff line
+ggplot(bird_out, aes(x = seq_len(n), y = D2, color = Outlier)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = cutoff, linetype = "dashed", color = "red", linewidth = 1) +
+  labs(
+    title = expression(paste("Detection of MVN Outliers using ", D^2, " Distances")),
+    x = "Observation Index",
+    y = expression(D^2)
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("No" = "darkblue", "Yes" = "red"))
+```
+
+I calculated each observation’s Mahalanobis distance to measure how far it lies from the multivariate center relative to the covariance structure. Using a chi-square cutoff at 97.5% with 2 degrees of freedom, any observation exceeding that value is flagged as a possible outlier. The plot visually highlights these outliers in red.
+
+### e. Box-Cox Transformation
+
+```{r}
+library(MASS)
+
+
+summary(bird)
+
+# TailL transformation
+bc_tail <- boxcox(lm(TailL ~ 1, data = bird),        # intercept-only model
+                  lambda = seq(-2, 2, by = 0.1),
+                  main = "Box–Cox Transformation for TailL")
+lambda_tail <- bc_tail$x[which.max(bc_tail$y)]
+cat(sprintf("Best λ for TailL = %.3f\n", lambda_tail))
+
+# WingL transformation
+bc_wing <- boxcox(lm(WingL ~ 1, data = bird),
+                  lambda = seq(-2, 2, by = 0.1),
+                  main = "Box–Cox Transformation for WingL")
+lambda_wing <- bc_wing$x[which.max(bc_wing$y)]
+cat(sprintf("Best λ for WingL = %.3f\n", lambda_wing))
+```
+
+I used the MASS::boxcox() function with an intercept-only model to identify the λ value that maximizes the log-likelihood for each variable.
+The value of λ near 1 indicates that the variable is already approximately normal. If λ is close to 0, a logarithmic transformation is recommended.
+The red line in the Box–Cox plot shows the range of λ values within the 95 % confidence interval of the maximum likelihood.
+
+
+### f. 95% T^2 Control Chart 
+```{r}
+library(ggplot2)
+
+# Reusing data and variables
+X <- as.matrix(bird_xy)
+n <- nrow(X)
+p <- ncol(X)
+
+# Computing the mean vector and covariance matrix
+x_bar <- colMeans(X)
+S <- cov(X)
+
+# Computing Hotelling's T² 
+T2 <- apply(X, 1, function(x) t(x - x_bar) %*% solve(S) %*% (x - x_bar))
+
+# Calculating the 95% cutoff using F distribution
+alpha <- 0.05
+T2_cutoff <- ((n - 1)^2 / n) * qf(1 - alpha, p, n - p) / (n - p)
+
+cat(sprintf("95%% T² cutoff value = %.3f\n", T2_cutoff))
+
+# Identifying observations beyond the control limit
+outliers_T2 <- which(T2 > T2_cutoff)
+cat("Observations beyond the control limit:", outliers_T2, "\n")
+
+# Creating control chart
+T2_df <- data.frame(Index = 1:n, T2 = T2, 
+                    Outlier = ifelse(T2 > T2_cutoff, "Yes", "No"))
+
+ggplot(T2_df, aes(x = Index, y = T2, color = Outlier)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = T2_cutoff, color = "red", linetype = "dashed", linewidth = 1) +
+  labs(
+    title = expression(paste("95% Hotelling's ", T^2, " Control Chart")),
+    x = "Observation Index",
+    y = expression(T^2)
+  ) +
+  theme_minimal() +
+  scale_color_manual(values = c("No" = "darkblue", "Yes" = "red"))
+```
+
+I computed each observation’s Hotelling statistic to assess how far it lies from the overall multivariate mean.
+The 95% control limit is based on the F distribution with parameters p = 2 and n - p.
+Points above this red dashed line are flagged as potential multivariate outliers.
+If most points fall below the limit, the data set can be considered multivariate stable.
+
+
+### g. Function that builds simultaneous 100(1-alpha)% T^2
+```{r}
+# Simultaneous Hotelling T^2 CIs for linear combos a'μ
+T2_simul_ci <- function(X, A = NULL, alpha = 0.05, labels = NULL) {
+  X <- as.matrix(X)
+  n <- nrow(X); p <- ncol(X)
+  xbar <- colMeans(X)
+  S <- cov(X)
+
+  # Critical factor from Hotelling's T^2 
+  Fcrit <- qf(1 - alpha, p, n - p)
+  c_factor <- sqrt( (p * (n - 1) * Fcrit) / (n - p) )
+
+  
+  if (is.null(A)) A <- diag(p)
+  A <- as.matrix(A)
+
+  out <- lapply(seq_len(nrow(A)), function(i){
+    a <- matrix(A[i, ], ncol = 1)
+    est <- as.numeric(t(a) %*% xbar)
+    se  <- as.numeric( sqrt(t(a) %*% S %*% a / n) )
+    lower <- est - c_factor * se
+    upper <- est + c_factor * se
+    data.frame(Estimate = est, SE = se, Lower = lower, Upper = upper, 
+               row.names = NULL, check.names = FALSE)
+  })
+  res <- do.call(rbind, out)
+  if (!is.null(labels)) res <- cbind(Parameter = labels, res)
+  res
+}
+```
+
+```{r}
+# Use TailL as variable 1 and WingL as variable 2
+X <- as.matrix(bird[, c("TailL","WingL")])
+
+# Contrast rows: e1 = (1,0) for μ1, e2 = (0,1) for μ2, diff = (1,-1) for μ1-μ2
+A <- rbind(
+  c(1, 0),   # μ1 (Tail)
+  c(0, 1),   # μ2 (Wing)
+  c(1,-1)    # μ1 - μ2
+)
+
+labels <- c("mu1 (TailL)", "mu2 (WingL)", "mu1 - mu2")
+
+simul_CIs <- T2_simul_ci(X, A = A, alpha = 0.05, labels = labels)
+
+simul_CIs[, -1] <- round(simul_CIs[, -1], 3)
+print(simul_CIs)
+```
+
+
+## Question 2
+
+### a. Bivariate MVN Tests for all variable pairs 
+```{r}
+library(MVN)
+library(ellipse)
+library(ggplot2)
+
+# Data
+milk <- read.csv("MILK.csv")
+
+# Defining the 3 bivariate pairs
+pairs_list <- list(
+  c("Fuel", "Repair"),
+  c("Fuel", "Capital"),
+  c("Repair", "Capital")
+)
+
+# Loop over all 3 pairs
+for (pair in pairs_list) {
+  cat("\n=====================================================\n")
+  cat("Pair:", pair[1], "and", pair[2], "\n")
+  
+  X <- milk[, pair]
+  xbar <- colMeans(X)
+  S <- cov(X)
+  
+  #  Mardia’s test for bivariate normality
+  mvn_res <- mvn(data = X)
+  print(mvn_res$multivariateNormality)
+  
+  #  Chi-square ellipse
+  plot(X[,1], X[,2],
+       pch = 19, col = "darkblue",
+       xlab = pair[1], ylab = pair[2],
+       main = paste("Bivariate Normality Test:", pair[1], "vs", pair[2]))
+  lines(ellipse(S, centre = xbar, level = 0.95), col = "red", lwd = 2)
+}
+```
+
+I tested each pair of variables (Fuel–Repair, Fuel–Capital, and Repair–Capital) for bivariate normality using Mardia’s skewness and kurtosis measures.
+The chi-square ellipses visually show whether the data follow an elliptical pattern.
+Non-significant p-values and roughly elliptical plots indicate approximate bivariate normality.
+
+### b. Univariate Normal Q-Q Plots
+
+```{r}
+library(ggplot2)
+
+# List of variables
+vars <- c("Fuel", "Repair", "Capital")
+
+#  Q-Q plots
+for (v in vars) {
+  p <- ggplot(milk, aes(sample = .data[[v]])) +
+    stat_qq(color = "blue") +
+    stat_qq_line(color = "red") +
+    labs(title = paste("Occil Normal Q-Q Plot for", v),
+         x = "Theoretical Quantiles",
+         y = "Sample Quantiles") +
+    theme_minimal() +
+    theme(plot.title = element_text(size = 13, face = "bold"))
+  
+  print(p)   
+}
+
+```
+
+I made Q–Q plots for the three variables: Fuel, Repair, and Capital.
+If the points fall close to the red line, that means the data follow a normal pattern.
+Points far from the line or curved patterns mean the data are not normal.
+From these plots, I can see which variables look normal and which may need a transformation before doing multivariate analysis.
+
+### c. Outliers
+```{r}
+library(ggplot2)
+library(MASS)
+
+X <- as.matrix(na.omit(milk[, c("Fuel","Repair","Capital")]))
+n <- nrow(X); p <- ncol(X)
+
+# classical Mahalanobis
+xbar <- colMeans(X)
+S <- cov(X)
+
+eig <- eigen(S, symmetric = TRUE)$values
+if (any(eig <= .Machine$double.eps)) S <- S + diag(p) * 1e-8
+
+D2 <- mahalanobis(X, center = xbar, cov = S)
+
+# chi-square cutoffs
+cuts <- qchisq(c(.95, .975, .99), df = p)
+names(cuts) <- c("95%", "97.5%", "99%")
+
+# indices
+which_95  <- which(D2 > cuts["95%"])
+which_975 <- which(D2 > cuts["97.5%"])
+which_99  <- which(D2 > cuts["99%"])
+
+cat("\nMahalanobis D^2 outliers (classical):\n")
+cat(" >95% cutoff:   ", which_95,  "\n")
+cat(" >97.5% cutoff: ", which_975, "\n")
+cat(" >99% cutoff:   ", which_99,  "\n")
+
+# plot
+df_d2 <- data.frame(Index = seq_len(n), D2 = as.numeric(D2),
+                    Flag = ifelse(D2 > cuts["97.5%"], "Yes", "No"))
+
+ggplot(df_d2, aes(Index, D2, color = Flag)) +
+  geom_point(size = 3) +
+  geom_hline(yintercept = cuts["95%"],   linetype = "dotted") +
+  geom_hline(yintercept = cuts["97.5%"], linetype = "dashed", color = "red") +
+  geom_hline(yintercept = cuts["99%"],   linetype = "dotdash") +
+  labs(title = expression(paste("Mahalanobis ", D^2, " with ", chi^2, " cutoffs (df=3)")),
+       y = expression(D^2)) +
+  scale_color_manual(values = c("No" = "darkblue", "Yes" = "red")) +
+  theme_minimal()
+
+# Univariate boxplot outliers
+vars <- c("Fuel","Repair","Capital")
+u_out <- lapply(vars, function(v){
+  xv <- X[, v]
+  idx <- which(xv %in% boxplot.stats(xv)$out)
+  if (!length(idx)) return(data.frame(Variable=character(), Index=integer(), Value=double()))
+  data.frame(Variable = v, Index = idx, Value = xv[idx])
+})
+u_out_df <- do.call(rbind, u_out)
+
+cat("\nUnivariate boxplot outliers (if any):\n")
+if (is.null(u_out_df) || nrow(u_out_df) == 0) {
+  cat("None found by the boxplot rule.\n")
+} else {
+  print(u_out_df)
+}
+
+```
+
+- I computed Mahalanobis D^2 for all three variables together.
+
+- I used chi-square cutoffs at 95%, 97.5%, and 99%. Points above a cutoff are possible outliers.
+
+- I also ran a robust check (MCD). If the robust and classical lists agree, the outliers are likely real.
+
+- I checked each variable with the boxplot rule to see if any single variable has extreme values.
+
+- I used the 97.5% line in the plot to highlight flagged points in red.
+
+### d. 95% Bonferroni confidence intervals
+```{r}
+# Data matrix
+X <- as.matrix(milk[, c("Fuel","Repair","Capital")])
+n <- nrow(X); p <- ncol(X)
+
+# Sample means and covariance
+xbar <- colMeans(X)
+S    <- cov(X)
+
+# Bonferroni critical t 
+alpha <- 0.05
+t_bonf <- qt(1 - alpha/(2*p), df = n - 1)
+
+# Standard errors of the means
+se_mean <- sqrt(diag(S) / n)
+
+# Interval endpoints
+bonf_lower <- xbar - t_bonf * se_mean
+bonf_upper <- xbar + t_bonf * se_mean
+
+# Neat table
+Bonferroni_CI <- data.frame(
+  Variable = colnames(X),
+  Mean = xbar,
+  SE = se_mean,
+  Lower = bonf_lower,
+  Upper = bonf_upper,
+  row.names = NULL
+)
+
+# Round numeric columns (keep text column intact)
+Bonferroni_CI[, -1] <- round(Bonferroni_CI[, -1], 3)
+
+Bonferroni_CI
+```
+
+- I made Bonferroni 95% CIs for the three means.
+
+- I used a t value adjusted for three comparisons.
+
+- Each interval is: mean ± t*SE, where SE is the standard error of that variable’s mean.
+
+- These intervals control the overall 95% error rate across the three means.
+
+### e. 95% T^2 Simultaneous Confidence Intervals 
+```{r}
+# Data matrix
+X <- as.matrix(milk[, c("Fuel","Repair","Capital")])
+n <- nrow(X); p <- ncol(X)
+
+# Mean vector and covariance
+xbar <- colMeans(X)
+S <- cov(X)
+
+# Critical value for Hotelling's T²
+alpha <- 0.05
+F_crit <- qf(1 - alpha, p, n - p)
+c_factor <- sqrt((p * (n - 1) * F_crit) / (n - p))
+
+# Standard errors of means
+se_mean <- sqrt(diag(S) / n)
+
+# T² confidence limits
+T2_lower <- xbar - c_factor * se_mean
+T2_upper <- xbar + c_factor * se_mean
+
+# Combining into a table
+T2_CI <- data.frame(
+  Variable = colnames(X),
+  Mean = xbar,
+  SE = se_mean,
+  Lower = T2_lower,
+  Upper = T2_upper
+)
+
+# Rounding numeric columns except text
+T2_CI[, -1] <- round(T2_CI[, -1], 3)
+T2_CI
+```
+
+I built 95% T² intervals for the means of Fuel, Repair, and Capital.
+These intervals come from Hotelling’s T² method and cover all three means together at the same time.
+They are a bit wider than the Bonferroni intervals because they control for the joint coverage of all means.
+The overlap between T² and Bonferroni results shows that both methods give similar center points, but T² is more conservative.
