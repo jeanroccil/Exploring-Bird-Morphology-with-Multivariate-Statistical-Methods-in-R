@@ -35,12 +35,7 @@ ggplot2
 psych
 corrplot
 Additional statistical libraries for multivariate analysis
-Repository Structure
-├── Project.Rmd               # R Markdown source file
-├── Project.html              # Rendered report
-├── Project.pdf               # PDF report (if included)
-├── data/                     # Dataset
-└── README.md
+
 Key Skills Demonstrated
 Multivariate Statistical Analysis
 Principal Component Analysis (PCA)
